@@ -1,42 +1,38 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
 import calendar
+from datetime import datetime, timedelta
 import random
 from collections import defaultdict
 
-st.set_page_config(page_title="Automated Roster Generator", layout="wide")
-st.title("📅 Fully Automated Monthly Shift Roster Generator")
+st.set_page_config(page_title="Auto Roster Generator", layout="wide")
+st.title("📅 Fully Automated Shift Roster Generator (No File Uploads)")
 
 st.markdown("""
-This app automatically:
-- Assigns off days per employee
-- Distributes shifts fairly
-- Prevents **Night → Morning** shift transitions
+This app lets you:
+- Enter engineers manually
+- Set month, working days, and off-days per person
+- Auto-generate fair shift rosters
 """)
 
-# Step 1: Upload Employee List
-st.header("📥 Step 1: Upload Employee Off-Day Requirements")
-uploaded_file = st.file_uploader("Upload a CSV with columns: `Name`, `OffDays`", type="csv")
+# Step 1: Enter engineers and off-days
+st.header("👥 Step 1: Enter Engineer Names and Off-Days")
 
-if uploaded_file:
-    try:
-        df_employees = pd.read_csv(uploaded_file)
-        if 'Name' not in df_employees.columns or 'OffDays' not in df_employees.columns:
-            st.error("CSV must contain columns: Name, OffDays")
-            st.stop()
-        df_employees['OffDays'] = df_employees['OffDays'].astype(int)
-        st.success("Employee data loaded successfully.")
-        st.dataframe(df_employees)
-    except Exception as e:
-        st.error(f"Error loading CSV: {e}")
-        st.stop()
-else:
-    st.info("Please upload a valid CSV to proceed.")
+names_input = st.text_area("Enter engineer names (one per line)", "John\nSam\nAlice\nBob")
+names = [n.strip() for n in names_input.split("\n") if n.strip()]
+
+if not names:
+    st.warning("Please enter at least one engineer.")
     st.stop()
 
-# Step 2: Month and Shifts
-st.header("🗓️ Step 2: Select Month and Shifts")
+default_off = 8
+offs = {}
+st.write("### 🔧 Off-Days per Engineer")
+for name in names:
+    offs[name] = st.number_input(f"Off days for {name}", min_value=0, max_value=31, value=default_off, step=1)
+
+# Step 2: Month, shifts, working days
+st.header("📆 Step 2: Month, Working Days & Shifts")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -47,30 +43,29 @@ month = list(calendar.month_name).index(month_name)
 
 shifts_input = st.text_input("Enter shift types (comma-separated)", "Morning, Evening, Night")
 shifts = [s.strip() for s in shifts_input.split(",") if s.strip()]
-
 if not shifts:
     st.error("Please enter at least one shift.")
     st.stop()
 
-# Generate Button
+num_days = calendar.monthrange(year, month)[1]
+st.info(f"{calendar.month_name[month]} {year} has **{num_days} days**.")
+
+# Generate button
 if st.button("🚀 Generate Roster"):
     st.info("Generating roster...")
 
-    employees = dict(zip(df_employees['Name'], df_employees['OffDays']))
-
-    # Get dates
-    num_days = calendar.monthrange(year, month)[1]
+    employees = offs  # name -> off days
     start_date = datetime(year, month, 1)
     all_dates = [start_date + timedelta(days=i) for i in range(num_days)]
     all_date_strs = [d.strftime("%Y-%m-%d") for d in all_dates]
 
-    # Generate off days
+    # Step 1: Randomly assign off days
     employee_off_days = {}
     for emp, off_count in employees.items():
         off_days = random.sample(all_date_strs, min(off_count, len(all_date_strs)))
         employee_off_days[emp] = set(off_days)
 
-    # Shift assignment with fairness + night→morning prevention
+    # Step 2: Assign shifts
     prev_shift = {emp: None for emp in employees}
     shift_counts = {emp: defaultdict(int) for emp in employees}
     roster = []
@@ -83,19 +78,17 @@ if st.button("🚀 Generate Roster"):
         available_emps = [e for e in employees if date_str not in employee_off_days[e]]
         random.shuffle(available_emps)
 
-        # Score by fairness and night shift rule
         emp_scores = []
         for emp in available_emps:
             penalty = 0
             if prev_shift[emp] == "Night":
-                penalty += 100  # Avoid morning after night
-            penalty += sum(shift_counts[emp].values())  # Balance load
+                penalty += 100
+            penalty += sum(shift_counts[emp].values())
             emp_scores.append((penalty, emp))
 
         emp_scores.sort()
         sorted_emps = [emp for _, emp in emp_scores]
 
-        # Assign shifts
         for i, emp in enumerate(sorted_emps):
             shift = shifts[i % len(shifts)]
             if prev_shift[emp] == "Night" and shift == "Morning":
@@ -109,17 +102,15 @@ if st.button("🚀 Generate Roster"):
             roster.append({
                 "Date": date_str,
                 "Day": weekday,
-                "Employee": emp,
+                "Engineer": emp,
                 "Shift": shift
             })
 
-    # Output
     df_roster = pd.DataFrame(roster)
     st.success("✅ Roster generated successfully!")
     st.dataframe(df_roster, use_container_width=True)
 
-    # Download
     csv = df_roster.to_csv(index=False).encode("utf-8")
     filename = f"roster_{year}_{month:02}.csv"
-    st.download_button("📥 Download Roster as CSV", csv, file_name=filename, mime="text/csv")
-
+    st.download_button("📥 Download CSV", csv, file_name=filename, mime="text/csv")
+    
